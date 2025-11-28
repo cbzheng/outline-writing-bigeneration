@@ -1,0 +1,5 @@
+{
+  "name": "Structura AI Writer",
+  "description": "A human-in-the-loop AI writing assistant that bridges the gap between structured outlining and prose generation using Gemini.",
+  "requestFramePermissions": []
+}
