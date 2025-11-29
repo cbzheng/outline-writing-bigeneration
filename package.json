@@ -12,6 +12,8 @@
     "@google/genai": "^1.30.0",
     "@hello-pangea/dnd": "^18.0.1",
     "@tailwindcss/vite": "^4.1.17",
+    "@types/diff": "^7.0.2",
+    "diff": "^8.0.2",
     "lucide-react": "^0.555.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

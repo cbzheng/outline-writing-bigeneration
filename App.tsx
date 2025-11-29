@@ -6,18 +6,16 @@ import {
   OutlineSettings, TextSettings, EditingCommentState, AppState, Snapshot, ExportData, Suggestion
 } from './types';
 import { generateOutline, generateContentFromBlocks, generateSuggestion, generateBlocksFromContent } from './services/geminiService';
-import { BlockItem } from './components/BlockItem';
+import { fileSystemStorageProvider } from './services/storageService';
 import { CommentModal } from './components/CommentModal';
 import { RegenerationModal } from './components/RegenerationModal';
 import { HistoryModal } from './components/HistoryModal';
-import { RemarksPanel } from './components/RemarksPanel'; // Assuming this component exists or will be created
-import {
-  Settings, PenTool, Sparkles, Wand2, RefreshCw, Key, ArrowRight,
-  Layout, Type, Copy, FileText, ChevronDown, Sliders, History,
-  Download, Upload, Save, FileJson, MessageSquarePlus, Send, MessageSquare, PanelRightOpen, PanelRightClose, X, Globe,
-  AlignLeft, List
-} from 'lucide-react';
-import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
+import { RemarksPanel } from './components/RemarksPanel';
+import { ApiKeyModal } from './components/ApiKeyModal';
+import { Header } from './components/Header';
+import { Editor } from './components/Editor';
+import { Sidebar } from './components/Sidebar';
+import { DropResult } from '@hello-pangea/dnd';
 
 const LOCAL_STORAGE_KEY_API = 'structura_api_keys';
 
@@ -87,6 +85,7 @@ const App = () => {
   const [markdownContent, setMarkdownContent] = useState('');
 
   // Content State
+  const [isInputPanelOpen, setIsInputPanelOpen] = useState(true);
   const [inputMode, setInputMode] = useState<'topic' | 'content'>('topic');
   const [topic, setTopic] = useState('');
   const [rawContent, setRawContent] = useState('');
@@ -100,7 +99,6 @@ const App = () => {
   // UI State
   const [activeCommentBlockId, setActiveCommentBlockId] = useState<string | null>(null);
   const [activeRemarkBlockId, setActiveRemarkBlockId] = useState<string | null>(null);
-  const [inlineRemarksBlockIds, setInlineRemarksBlockIds] = useState<Set<string>>(new Set());
   const [editingComment, setEditingComment] = useState<EditingCommentState | null>(null);
   const [regenerationTargetBlockId, setRegenerationTargetBlockId] = useState<string | null>(null);
   const [showFileMenu, setShowFileMenu] = useState(false);
@@ -109,6 +107,13 @@ const App = () => {
   const [statusMessage, setStatusMessage] = useState('');
   const [showOutlineSettings, setShowOutlineSettings] = useState(false);
   const [showTextSettings, setShowTextSettings] = useState(false);
+  const [inlineRemarksBlockIds, setInlineRemarksBlockIds] = useState<Set<string>>(new Set());
+
+  // Auto-Save State
+  const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
+  const [lastSavedTimestamp, setLastSavedTimestamp] = useState<number>(Date.now());
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Layout State
   const [sidebarWidth, setSidebarWidth] = useState(400);
@@ -125,6 +130,44 @@ const App = () => {
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // --- Effects ---
+
+  // Auto-Save Effect
+  useEffect(() => {
+    // If we have a file handle and changes are made (status is unsaved), trigger auto-save
+    if (fileHandle && saveStatus === 'unsaved') {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+      }
+
+      autoSaveTimeoutRef.current = setTimeout(async () => {
+        setSaveStatus('saving');
+        try {
+          const exportData = getExportData();
+          await fileSystemStorageProvider.saveFile(exportData, fileHandle);
+          setSaveStatus('saved');
+          setLastSavedTimestamp(Date.now());
+        } catch (error) {
+          console.error('Auto-save failed:', error);
+          setSaveStatus('unsaved'); // Retry next time
+        }
+      }, 3000); // 3 seconds debounce
+    }
+
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+      }
+    };
+  }, [blocks, topic, outlineSettings, textSettings, history, fileHandle, saveStatus]);
+
+  // Mark as unsaved on changes
+  useEffect(() => {
+    if (fileHandle) {
+      setSaveStatus('unsaved');
+    }
+  }, [blocks, topic, outlineSettings, textSettings]); // Track relevant state changes
 
   // Load keys on mount
   useEffect(() => {
@@ -169,35 +212,76 @@ const App = () => {
 
   // --- Import / Export Logic ---
 
-  const handleExport = (type: 'current' | 'full') => {
-    const currentState: AppState = {
-      topic,
-      blocks,
-      outlineSettings,
-      textSettings
-    };
-
-    const exportData: ExportData = {
+  const getExportData = (): ExportData => {
+    return {
       metadata: {
-        appName: 'Structura AI Writer',
-        version: '1.0',
-        exportType: type,
+        appName: 'Structura',
+        version: '1.0.0',
+        exportType: 'full',
         timestamp: Date.now()
       },
-      current: currentState,
-      history: type === 'full' ? history : []
+      current: {
+        topic,
+        blocks,
+        outlineSettings,
+        textSettings
+      },
+      history
     };
+  };
 
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+  const handleExport = () => {
+    const data = getExportData();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `structura-${type}-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `structura-export-${new Date().toISOString().split('T')[0]}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    setShowFileMenu(false);
+  };
+
+  const handleSave = async () => {
+    setSaveStatus('saving');
+    try {
+      const data = getExportData();
+      const handle = await fileSystemStorageProvider.saveFile(data, fileHandle || undefined);
+      setFileHandle(handle);
+      setSaveStatus('saved');
+      setLastSavedTimestamp(Date.now());
+
+      // Create a snapshot on manual save if it's been a while since the last one?
+      // Or just always create one to ensure "each save corresponds to one version"
+      createSnapshot(`Saved: ${new Date().toLocaleTimeString()}`);
+    } catch (error) {
+      console.error('Save failed:', error);
+      setSaveStatus('unsaved');
+    }
+  };
+
+  const handleOpen = async () => {
+    try {
+      const { data, handle } = await fileSystemStorageProvider.openFile();
+
+      // Restore State
+      setTopic(data.current.topic);
+      setBlocks(data.current.blocks);
+      setOutlineSettings(data.current.outlineSettings);
+      setTextSettings(data.current.textSettings);
+      setHistory(data.history || []);
+
+      setFileHandle(handle);
+      setSaveStatus('saved');
+      setLastSavedTimestamp(Date.now());
+
+      // Reset UI
+      setIsInputPanelOpen(false);
+
+    } catch (error) {
+      console.error('Open failed:', error);
+    }
   };
 
   const handleImportClick = () => {
@@ -409,6 +493,7 @@ const App = () => {
 
       setBlocks(newBlocks);
       setStatus('success');
+      setIsInputPanelOpen(false); // Auto-collapse on success
 
       createSnapshot('Generated Structure from Content');
 
@@ -450,7 +535,7 @@ const App = () => {
       setBlocks(prev => {
         const next = prev.map(b => {
           if (contentMap[b.id]) {
-            return { ...b, content: contentMap[b.id] };
+            return { ...b, content: contentMap[b.id], isOutdated: false };
           }
           return b;
         });
@@ -486,7 +571,28 @@ const App = () => {
 
   // Block Manipulations
   const updateBlock = (id: string, updates: Partial<Block>) => {
-    setBlocks(prev => prev.map(b => b.id === id ? { ...b, ...updates } : b));
+    setBlocks(prev => prev.map(b => {
+      if (b.id !== id) return b;
+
+      const newBlock = { ...b, ...updates };
+
+      // Check if title changed and content exists -> mark as outdated
+      if (updates.title !== undefined && updates.title !== b.title && b.content.trim().length > 0) {
+        newBlock.isOutdated = true;
+      }
+
+      // If content is updated manually, clear outdated flag
+      if (updates.content !== undefined) {
+        newBlock.isOutdated = false;
+      }
+
+      // If isOutdated is explicitly passed (e.g. dismiss), respect it
+      if (updates.isOutdated !== undefined) {
+        newBlock.isOutdated = updates.isOutdated;
+      }
+
+      return newBlock;
+    }));
   };
 
   // Cascade Delete
@@ -550,42 +656,116 @@ const App = () => {
   const blocksToMarkdown = (currentBlocks: Block[]): string => {
     return currentBlocks.map(b => {
       const prefix = '#'.repeat(b.level + 1);
+      // Only show outline structure, ignore content
       return `${prefix} ${b.title}`;
     }).join('\n');
   };
 
-  const markdownToBlocks = (markdown: string): Block[] => {
+  const markdownToBlocks = (markdown: string, previousBlocks: Block[]): Block[] => {
     const lines = markdown.split('\n');
-    const newBlocks: Block[] = [];
+    const parsedBlocks: { title: string; level: number }[] = [];
 
+    // 1. Parse Markdown
     lines.forEach(line => {
       const trimmed = line.trim();
       if (!trimmed) return;
-
       const match = trimmed.match(/^(#{1,3})\s+(.*)/);
       if (match) {
-        const level = match[1].length - 1; // # -> 0, ## -> 1, ### -> 2
-        const title = match[2].trim();
+        parsedBlocks.push({
+          level: match[1].length - 1,
+          title: match[2].trim()
+        });
+      }
+    });
 
-        // Try to find existing block to preserve ID/content if possible (simple heuristic)
-        // For now, we'll just create new blocks to keep it simple and robust
+    const newBlocks: Block[] = [];
+    const matches: { oldIndex: number; isRename: boolean }[] = new Array(parsedBlocks.length).fill(null);
+    const usedOldIndices = new Set<number>();
+
+    // 2. Pass 1: Exact Title Matches
+    parsedBlocks.forEach((pBlock, i) => {
+      // Find first unused match
+      const matchIndex = previousBlocks.findIndex((b, idx) =>
+        b.title === pBlock.title && !usedOldIndices.has(idx)
+      );
+
+      if (matchIndex !== -1) {
+        matches[i] = { oldIndex: matchIndex, isRename: false };
+        usedOldIndices.add(matchIndex);
+      }
+    });
+
+    // 3. Pass 2: Gap Filling (Renames)
+    // We look for gaps in matches and try to fill them with unused blocks from the corresponding gap in previousBlocks
+    let i = 0;
+    while (i < parsedBlocks.length) {
+      if (matches[i] === null) {
+        // Found a gap start
+        const gapStart = i;
+        let gapEnd = i;
+        while (gapEnd < parsedBlocks.length && matches[gapEnd] === null) {
+          gapEnd++;
+        }
+        // Gap is [gapStart, gapEnd)
+
+        // Determine boundaries in old blocks
+        const prevOldIndex = gapStart > 0 && matches[gapStart - 1] ? matches[gapStart - 1].oldIndex : -1;
+        const nextOldIndex = gapEnd < parsedBlocks.length && matches[gapEnd] ? matches[gapEnd].oldIndex : previousBlocks.length;
+
+        // If the order is preserved (prev < next), we can look for candidates in between
+        if (prevOldIndex < nextOldIndex) {
+          const candidates: number[] = [];
+          for (let k = prevOldIndex + 1; k < nextOldIndex; k++) {
+            if (!usedOldIndices.has(k)) {
+              candidates.push(k);
+            }
+          }
+
+          // Map candidates to gap items 1-to-1
+          const mapCount = Math.min(candidates.length, gapEnd - gapStart);
+          for (let k = 0; k < mapCount; k++) {
+            matches[gapStart + k] = { oldIndex: candidates[k], isRename: true };
+            usedOldIndices.add(candidates[k]);
+          }
+        }
+
+        i = gapEnd;
+      } else {
+        i++;
+      }
+    }
+
+    // 4. Construct Result
+    parsedBlocks.forEach((pBlock, i) => {
+      const match = matches[i];
+      if (match) {
+        const oldBlock = previousBlocks[match.oldIndex];
+        newBlocks.push({
+          ...oldBlock,
+          title: pBlock.title,
+          level: pBlock.level,
+          isOutdated: match.isRename ? true : oldBlock.isOutdated // Mark outdated if renamed
+        });
+      } else {
+        // New Block
         newBlocks.push({
           id: uuidv4(),
-          title,
-          level,
+          title: pBlock.title,
+          level: pBlock.level,
           content: '',
           suggestions: [],
           comments: []
         });
       }
     });
+
     return newBlocks;
   };
 
   const toggleMarkdownMode = () => {
     if (isMarkdownMode) {
       // Switch to Visual: Parse markdown
-      const newBlocks = markdownToBlocks(markdownContent);
+      const newBlocks = markdownToBlocks(markdownContent, blocks);
       if (newBlocks.length > 0) {
         setBlocks(newBlocks);
       } else if (markdownContent.trim().length > 0) {
@@ -693,385 +873,71 @@ const App = () => {
   return (
     <div className="flex flex-col h-screen bg-slate-50 text-slate-900 select-none">
 
-      <input
-        type="file"
-        ref={fileInputRef}
-        onChange={handleFileChange}
-        accept=".json"
-        hidden
+      <Header
+        status={status}
+        statusMessage={statusMessage}
+        language={language}
+        setLanguage={setLanguage}
+        showLanguageMenu={showLanguageMenu}
+        setShowLanguageMenu={setShowLanguageMenu}
+        showFileMenu={showFileMenu}
+        setShowFileMenu={setShowFileMenu}
+        handleImportClick={handleImportClick}
+        handleExport={handleExport}
+        setShowHistoryModal={setShowHistoryModal}
+        setShowKeyModal={setShowKeyModal}
+        fileInputRef={fileInputRef}
+        handleFileChange={handleFileChange}
+        saveStatus={saveStatus}
+        onSave={handleSave}
+        onOpen={handleOpen}
+        lastSavedTimestamp={lastSavedTimestamp}
+        hasFileHandle={!!fileHandle}
       />
-
-      {/* Header */}
-      <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-20">
-        <div className="flex items-center gap-3">
-          <div className="bg-indigo-600 p-2 rounded-lg text-white">
-            <PenTool size={20} />
-          </div>
-          <div>
-            <h1 className="font-bold text-lg leading-tight text-slate-800">Structura</h1>
-            <p className="text-xs text-slate-500 font-medium">AI-Assisted Drafting</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {status !== 'idle' && (
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-full text-sm font-medium animate-pulse mr-2" title="Current system status">
-              <Sparkles size={14} />
-              {statusMessage}
-            </div>
-          )}
-
-          {/* Toolbar Buttons */}
-
-          <button
-            onClick={() => setShowHistoryModal(true)}
-            className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-all"
-            title="Version History"
-          >
-            <History size={20} />
-          </button>
-
-          <div className="relative">
-            <button
-              onClick={() => setShowLanguageMenu(!showLanguageMenu)}
-              className={`p-2 rounded-md transition-all flex items-center gap-1 ${showLanguageMenu ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:text-indigo-600 hover:bg-indigo-50'}`}
-              title="Output Language"
-            >
-              <Globe size={20} />
-              <span className="text-xs font-medium hidden sm:inline">{language}</span>
-            </button>
-            {showLanguageMenu && (
-              <div className="absolute top-full right-0 mt-2 w-32 bg-white rounded-xl shadow-xl border border-slate-100 p-1 z-50 animate-fade-in-up">
-                {['English', '中文', 'Spanish', 'French', 'German', 'Japanese'].map(lang => (
-                  <button
-                    key={lang}
-                    onClick={() => {
-                      setLanguage(lang);
-                      setShowLanguageMenu(false);
-                    }}
-                    className={`w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-slate-50 ${language === lang ? 'text-indigo-600 font-semibold bg-indigo-50' : 'text-slate-600'}`}
-                  >
-                    {lang}
-                  </button>
-                ))}
-                <div className="h-px bg-slate-100 my-1"></div>
-                <button
-                  onClick={() => {
-                    const custom = prompt("Enter custom language:", language);
-                    if (custom) setLanguage(custom);
-                    setShowLanguageMenu(false);
-                  }}
-                  className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-slate-50 text-slate-600 italic"
-                >
-                  Custom...
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="relative">
-            <button
-              onClick={() => setShowFileMenu(!showFileMenu)}
-              className={`p-2 rounded-md transition-all ${showFileMenu ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'}`}
-              title="Import / Export"
-            >
-              <Save size={20} />
-            </button>
-            {showFileMenu && (
-              <div className="absolute top-full right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 p-2 animate-fade-in-up z-50">
-                <button onClick={handleImportClick} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-indigo-600 rounded-lg text-left">
-                  <Upload size={16} /> Import JSON
-                </button>
-                <div className="h-px bg-slate-100 my-1"></div>
-                <button onClick={() => handleExport('current')} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-indigo-600 rounded-lg text-left">
-                  <FileJson size={16} /> Export Current
-                </button>
-                <button onClick={() => handleExport('full')} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-indigo-600 rounded-lg text-left">
-                  <Download size={16} /> Export Full History
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="w-px h-6 bg-slate-200 mx-2"></div>
-
-          <button
-            onClick={() => setShowKeyModal(true)}
-            className="p-2 text-slate-500 hover:text-slate-800 transition-colors"
-            title="Configure API Keys"
-          >
-            <Settings size={20} />
-          </button>
-        </div>
-      </header>
 
       {/* Main Content Container */}
       <div className="flex-1 flex overflow-hidden w-full relative">
 
-        {/* Left Panel: Outline & Controls */}
-        <aside
-          style={{ width: sidebarWidth }}
-          className="flex flex-col bg-slate-50 shrink-0 border-r border-slate-200"
-        >
-
-          {/* Input Area */}
-          <div className="p-4 bg-white border-b border-slate-200 relative">
-            <div className="flex justify-between items-center mb-2">
-              <div className="flex gap-2 bg-slate-100 p-1 rounded-lg">
-                <button
-                  onClick={() => setInputMode('topic')}
-                  className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${inputMode === 'topic' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                >
-                  TOPIC
-                </button>
-                <button
-                  onClick={() => setInputMode('content')}
-                  className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${inputMode === 'content' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                >
-                  CONTENT
-                </button>
-              </div>
-
-              {inputMode === 'topic' && (
-                <div className="relative group">
-                  <select
-                    onChange={(e) => handleTemplateSelect(e.target.value)}
-                    className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-1 rounded cursor-pointer outline-none hover:bg-slate-200"
-                    defaultValue=""
-                    title="Select a document template"
-                  >
-                    <option value="" disabled>Load Template...</option>
-                    {TEMPLATES.map(t => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </div>
-
-            {inputMode === 'topic' ? (
-              <>
-                <textarea
-                  value={topic}
-                  onChange={(e) => setTopic(e.target.value)}
-                  placeholder="What do you want to write about? (e.g., 'The Future of AI in Healthcare')"
-                  className="w-full h-20 p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none resize-none transition-all"
-                />
-                <div className="flex justify-between items-center mt-3">
-                  <button
-                    onClick={() => setShowOutlineSettings(!showOutlineSettings)}
-                    className="text-xs font-medium text-slate-500 hover:text-indigo-600 flex items-center gap-1 transition-colors"
-                  >
-                    <Sliders size={14} /> Configure Outline
-                  </button>
-                  <button
-                    onClick={handleGenerateOutline}
-                    disabled={!topic.trim() || status === 'loading'}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg active:scale-95"
-                  >
-                    {status === 'loading' ? <RefreshCw size={16} className="animate-spin" /> : <Wand2 size={16} />}
-                    Generate Outline
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <textarea
-                  value={rawContent}
-                  onChange={(e) => setRawContent(e.target.value)}
-                  placeholder="Paste your existing content here..."
-                  className="w-full h-32 p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none resize-none transition-all font-mono"
-                />
-                <div className="flex justify-end items-center mt-3">
-                  <button
-                    onClick={handleGenerateStructure}
-                    disabled={!rawContent.trim() || status === 'loading'}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg active:scale-95"
-                  >
-                    {status === 'loading' ? <RefreshCw size={16} className="animate-spin" /> : <Layout size={16} />}
-                    Generate Structure
-                  </button>
-                </div>
-              </>
-            )}
-
-            {/* Outline Settings Panel (Conditional) */}
-            {showOutlineSettings && inputMode === 'topic' && (
-              <div className="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs grid grid-cols-2 gap-2 animate-fade-in-down">
-                <div>
-                  <label className="block text-slate-400 mb-1">Length</label>
-                  <select
-                    value={outlineSettings.length}
-                    onChange={(e) => setOutlineSettings({ ...outlineSettings, length: e.target.value as any })}
-                    className="w-full p-1 border rounded bg-white"
-                    title="Target length of the outline"
-                  >
-                    <option value="short">Short (3-5 pts)</option>
-                    <option value="medium">Medium</option>
-                    <option value="long">Long (Detailed)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-slate-400 mb-1">Depth</label>
-                  <select
-                    value={outlineSettings.detailLevel}
-                    onChange={(e) => setOutlineSettings({ ...outlineSettings, detailLevel: e.target.value as any })}
-                    className="w-full p-1 border rounded bg-white"
-                    title="Complexity of nested levels"
-                  >
-                    <option value="low">Simple</option>
-                    <option value="high">Complex (Nested)</option>
-                  </select>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="flex gap-2 px-4 py-2 border-b border-slate-100">
-            <button
-              onClick={toggleMarkdownMode}
-              className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-              title={isMarkdownMode ? "Switch to Visual View" : "Edit as Markdown"}
-            >
-              {isMarkdownMode ? <List size={20} /> : <AlignLeft size={20} />}
-            </button>
-            {blocks.length > 0 && (
-              <button
-                onClick={addBlock}
-                className="px-3 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium text-xl ml-auto"
-                title="Add manual block"
-              >
-                +
-              </button>
-            )}
-          </div>
-
-          {/* Outline List */}
-          <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-            {isMarkdownMode ? (
-              <div className="h-full flex flex-col">
-                <div className="bg-amber-50 border border-amber-100 text-amber-800 text-xs p-2 rounded mb-2">
-                  <strong>Markdown Mode:</strong> Use <code>#</code> for Main Sections, <code>##</code> for Sub-sections, <code>###</code> for Details.
-                </div>
-                <textarea
-                  value={markdownContent}
-                  onChange={(e) => setMarkdownContent(e.target.value)}
-                  className="flex-1 w-full p-4 font-mono text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
-                  placeholder="# Introduction&#10;## Background&#10;### Key Concept"
-                />
-              </div>
-            ) : blocks.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-slate-400 text-center p-8">
-                <Layout size={48} className="mb-4 opacity-50" />
-                <p className="text-sm">Enter a topic or pick a template.</p>
-              </div>
-            ) : (
-              <DragDropContext onDragEnd={handleDragEnd}>
-                <Droppable droppableId="outline-list">
-                  {(provided) => (
-                    <div
-                      className="space-y-1 pb-20"
-                      {...provided.droppableProps}
-                      ref={provided.innerRef}
-                    >
-                      {blocks.map((block, index) => (
-                        <Draggable draggableId={block.id} index={index} key={block.id}>
-                          {(provided, snapshot) => (
-                            <BlockItem
-                              block={block}
-                              isSelected={selectedBlockIds.has(block.id)}
-                              onSelect={(id) => handleBlockSelect(id, true)}
-                              onUpdate={updateBlock}
-                              onRemove={removeBlock}
-                              onAddComment={(id) => setActiveCommentBlockId(id)}
-                              onEditComment={startEditingComment}
-                              onMoveUp={() => moveBlock(index, 'up')}
-                              onMoveDown={() => moveBlock(index, 'down')}
-                              onIndent={() => changeLevel(block.id, 1)}
-                              onOutdent={() => changeLevel(block.id, -1)}
-                              dragProvided={provided}
-                            />
-                          )}
-                        </Draggable>
-                      ))}
-                      {provided.placeholder}
-                    </div>
-                  )}
-                </Droppable>
-              </DragDropContext>
-            )}
-          </div>
-
-          {/* Content Gen Controls */}
-          {blocks.length > 0 && (
-            <div className="p-4 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10 relative">
-              {/* Text Settings Toggle */}
-              <div className="mb-2 flex justify-between items-center">
-                <button
-                  onClick={() => setShowTextSettings(!showTextSettings)}
-                  className="flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 font-medium"
-                  title="Adjust writing style parameters"
-                >
-                  <Sliders size={12} />
-                  Generation Style
-                  {showTextSettings ? <ChevronDown size={12} className="rotate-180" /> : <ChevronDown size={12} />}
-                </button>
-                <span className="text-[10px] uppercase text-slate-400 font-bold tracking-wide">{textSettings.tone}</span>
-              </div>
-
-              {showTextSettings && (
-                <div className="absolute bottom-full left-0 right-0 bg-white border-t border-slate-200 p-4 shadow-lg animate-fade-in-up z-20">
-                  <div className="mb-3">
-                    <label className="block text-xs text-slate-400 uppercase tracking-wide mb-1">Tone</label>
-                    <div className="flex flex-wrap gap-2">
-                      {(['formal', 'casual', 'persuasive', 'technical', 'creative'] as const).map(t => (
-                        <button
-                          key={t}
-                          onClick={() => setTextSettings(p => ({ ...p, tone: t }))}
-                          className={`px-3 py-1 rounded-full text-xs border ${textSettings.tone === t ? 'bg-indigo-100 border-indigo-500 text-indigo-700' : 'border-slate-200 hover:bg-slate-50'}`}
-                          title={`Set tone to ${t}`}
-                        >
-                          {t.charAt(0).toUpperCase() + t.slice(1)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-400 uppercase tracking-wide mb-1">Custom Style Instructions</label>
-                    <input
-                      type="text"
-                      value={textSettings.customInstructions}
-                      onChange={(e) => setTextSettings(p => ({ ...p, customInstructions: e.target.value }))}
-                      placeholder="e.g. Use lots of metaphors, speak like a pirate..."
-                      className="w-full text-sm p-2 border border-slate-200 rounded outline-none focus:border-indigo-500"
-                      title="Add specific style instructions for the AI"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleGenerateContent(false)}
-                  disabled={status === 'loading'}
-                  className="flex-1 bg-slate-800 hover:bg-slate-900 text-white py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-all"
-                  title="Generate text for all blocks"
-                >
-                  <Type size={16} />
-                  Generate Text
-                </button>
-                <button
-                  onClick={() => handleGenerateContent(true)}
-                  disabled={status === 'loading' || selectedBlockIds.size === 0}
-                  className="px-4 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50 py-2.5 rounded-lg text-sm font-semibold transition-all"
-                  title="Generate text only for selected blocks"
-                >
-                  Selected
-                </button>
-              </div>
-            </div>
-          )}
-        </aside>
+        <Sidebar
+          sidebarWidth={sidebarWidth}
+          inputMode={inputMode}
+          setInputMode={setInputMode}
+          isInputPanelOpen={isInputPanelOpen}
+          setIsInputPanelOpen={setIsInputPanelOpen}
+          topic={topic}
+          setTopic={setTopic}
+          rawContent={rawContent}
+          setRawContent={setRawContent}
+          handleTemplateSelect={handleTemplateSelect}
+          showOutlineSettings={showOutlineSettings}
+          setShowOutlineSettings={setShowOutlineSettings}
+          outlineSettings={outlineSettings}
+          setOutlineSettings={setOutlineSettings}
+          handleGenerateOutline={handleGenerateOutline}
+          handleGenerateStructure={handleGenerateStructure}
+          status={status}
+          isMarkdownMode={isMarkdownMode}
+          toggleMarkdownMode={toggleMarkdownMode}
+          blocks={blocks}
+          addBlock={addBlock}
+          markdownContent={markdownContent}
+          setMarkdownContent={setMarkdownContent}
+          handleDragEnd={handleDragEnd}
+          selectedBlockIds={selectedBlockIds}
+          handleBlockSelect={handleBlockSelect}
+          updateBlock={updateBlock}
+          removeBlock={removeBlock}
+          setActiveCommentBlockId={setActiveCommentBlockId}
+          startEditingComment={startEditingComment}
+          moveBlock={moveBlock}
+          changeLevel={changeLevel}
+          showTextSettings={showTextSettings}
+          setShowTextSettings={setShowTextSettings}
+          textSettings={textSettings}
+          setTextSettings={setTextSettings}
+          handleGenerateContent={handleGenerateContent}
+          templates={TEMPLATES}
+        />
 
         {/* Resizer Handle */}
         <div
@@ -1082,144 +948,17 @@ const App = () => {
           <div className="h-8 w-1 bg-slate-300 rounded-full mb-1"></div>
         </div>
 
-        {/* Right Panel: Content Editor */}
-        <main className="flex-1 overflow-y-auto p-8 lg:p-12 bg-white relative">
-          <div className="max-w-5xl mx-auto min-h-full">
-
-            <div className="flex justify-end mb-4">
-              <button
-                onClick={handleCopyAll}
-                className="flex items-center gap-2 text-sm text-slate-500 hover:text-indigo-600 transition-colors"
-                title="Copy all generated text to clipboard"
-              >
-                <Copy size={14} />
-                Copy All
-              </button>
-            </div>
-
-            {blocks.filter(b => b.content).length === 0 ? (
-              <div className="h-[70vh] flex flex-col items-center justify-center text-slate-300">
-                <ArrowRight size={64} className="mb-6 opacity-20" />
-                <h2 className="text-xl font-medium text-slate-400">Content will appear here</h2>
-                <p className="text-slate-400 mt-2">Generate content from your outline to start writing.</p>
-              </div>
-            ) : (
-              blocks.map((block) => {
-                if (!block.content && !selectedBlockIds.has(block.id)) return null;
-
-                return (
-                  <div
-                    id={`text-block-${block.id}`}
-                    key={block.id}
-                    className={`transition-all duration-300 ${selectedBlockIds.has(block.id) ? 'translate-x-1 mb-2' : 'mb-1'}`}
-                  >
-                    {/* Combined Header: Title + Toolbar */}
-                    <div className="flex items-center justify-between mb-1 min-h-[24px]">
-                      {/* Block Title Label */}
-                      <div className={`text-[10px] uppercase font-bold text-slate-300 flex items-center gap-2 ${selectedBlockIds.has(block.id) ? 'text-indigo-400' : 'opacity-0 hover:opacity-100'}`}>
-                        <FileText size={10} />
-                        {block.title}
-                      </div>
-
-                      {/* Toolbar (Visible on Hover/Select) */}
-                      <div className={`flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity ${selectedBlockIds.has(block.id) ? 'opacity-100' : ''}`}>
-                        {/* Right Side Toolbar Actions */}
-                        <div className="flex bg-white border border-slate-200 rounded overflow-hidden shadow-sm">
-                          <button
-                            onClick={() => setActiveRemarkBlockId(block.id)}
-                            className="p-1.5 hover:bg-slate-100 text-slate-500 hover:text-indigo-600"
-                            title="Open remarks panel"
-                          >
-                            <MessageSquarePlus size={14} />
-                          </button>
-                          <div className="w-px bg-slate-200 mx-1"></div>
-                          <button
-                            onClick={() => toggleInlineRemarks(block.id)}
-                            className={`p-1.5 hover:bg-slate-100 ${inlineRemarksBlockIds.has(block.id) ? 'text-indigo-600 bg-indigo-50' : 'text-slate-500 hover:text-indigo-600'}`}
-                            title="Toggle inline remarks view"
-                          >
-                            {inlineRemarksBlockIds.has(block.id) ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Content Area Wrapper */}
-                    <div className="flex gap-4">
-                      {/* Text Editor */}
-                      <div className={`relative rounded-lg group ${selectedBlockIds.has(block.id) ? 'ring-2 ring-blue-100' : ''} ${inlineRemarksBlockIds.has(block.id) ? 'w-2/3' : 'w-full'}`}>
-                        <textarea
-                          value={block.content}
-                          onChange={(e) => updateBlock(block.id, { content: e.target.value })}
-                          onFocus={() => handleTextFocus(block.id)}
-                          placeholder="Drafting content..."
-                          className={`w-full bg-transparent resize-none overflow-hidden outline-none leading-relaxed min-h-[1.5em] px-0 py-1 rounded hover:bg-slate-50 transition-colors font-serif ${block.level === 0 ? 'text-2xl font-bold text-slate-800' : 'text-lg text-slate-700'}`}
-                          style={{ height: 'auto', minHeight: '1.5em' }}
-                          ref={(el) => {
-                            if (el) {
-                              el.style.height = 'auto';
-                              el.style.height = el.scrollHeight + 'px';
-                            }
-                          }}
-                        />
-                        {/* Inline Actions (Regenerate) */}
-                        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm border border-slate-200 rounded flex overflow-hidden">
-                          <button
-                            onClick={() => { setRegenerationTargetBlockId(block.id); }}
-                            className="p-1.5 hover:bg-slate-100 text-indigo-600"
-                            title="Regenerate this section with options"
-                          >
-                            <RefreshCw size={14} />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Inline Remarks Section */}
-                      {inlineRemarksBlockIds.has(block.id) && (
-                        <div className="w-1/3 bg-slate-50 rounded-lg border border-slate-200 p-3 text-sm animate-fade-in-left">
-                          <div className="flex items-center justify-between mb-2 pb-2 border-b border-slate-200">
-                            <span className="font-semibold text-slate-500 text-xs uppercase tracking-wide">Remarks & AI</span>
-                            <button onClick={() => toggleInlineRemarks(block.id)} className="text-slate-400 hover:text-slate-600"><X size={14} /></button>
-                          </div>
-                          <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
-                            {block.suggestions?.map(s => (
-                              <div key={s.id} className="bg-white border border-slate-200 rounded p-2 shadow-sm">
-                                <div className="text-xs text-slate-500 mb-1 font-medium">"{s.userText}"</div>
-                                <div className="text-slate-700 text-xs leading-relaxed pl-2 border-l-2 border-indigo-200">
-                                  <Sparkles size={10} className="inline mr-1 text-indigo-500" />
-                                  {s.aiText}
-                                </div>
-                              </div>
-                            ))}
-                            {block.comments?.map(c => (
-                              <div key={c.id} className="bg-yellow-50 border border-yellow-100 rounded p-2 text-xs text-slate-700">
-                                <span className="font-bold text-yellow-600 uppercase text-[10px] mr-1">{c.type}</span>
-                                {c.text}
-                              </div>
-                            ))}
-                            {(!block.suggestions?.length && !block.comments?.length) && (
-                              <div className="text-center text-slate-400 text-xs py-4 italic">
-                                No remarks yet. Open panel to add.
-                              </div>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => setActiveRemarkBlockId(block.id)}
-                            className="w-full mt-3 py-1.5 bg-white border border-slate-200 rounded text-xs text-slate-600 hover:text-indigo-600 hover:border-indigo-200 transition-colors flex items-center justify-center gap-1"
-                          >
-                            <MessageSquarePlus size={12} /> Add Remark
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-
-            <div className="h-40"></div> {/* Bottom spacer */}
-          </div>
-        </main>
+        <Editor
+          blocks={blocks}
+          selectedBlockIds={selectedBlockIds}
+          handleCopyAll={handleCopyAll}
+          updateBlock={updateBlock}
+          handleTextFocus={handleTextFocus}
+          setActiveRemarkBlockId={setActiveRemarkBlockId}
+          toggleInlineRemarks={toggleInlineRemarks}
+          inlineRemarksBlockIds={inlineRemarksBlockIds}
+          setRegenerationTargetBlockId={setRegenerationTargetBlockId}
+        />
       </div>
 
       {/* Modals */}
@@ -1242,6 +981,7 @@ const App = () => {
         onClose={() => setShowHistoryModal(false)}
         history={history}
         onRestore={restoreSnapshot}
+        currentBlocks={blocks}
       />
 
       <RemarksPanel
@@ -1256,84 +996,12 @@ const App = () => {
         setStatusMessage={setStatusMessage}
       />
 
-      {showKeyModal && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-lg">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="p-3 bg-indigo-100 rounded-full text-indigo-600">
-                <Key size={24} />
-              </div>
-              <div>
-                <h2 className="text-xl font-bold text-slate-800">API Configuration</h2>
-                <p className="text-sm text-slate-500">Enter your provider keys to enable AI features.</p>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1">Google Gemini Key <span className="text-red-500">*</span></label>
-                <input
-                  type="password"
-                  className="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none"
-                  placeholder="AIzaSy..."
-                  value={apiKeys.google}
-                  onChange={(e) => setApiKeys({ ...apiKeys, google: e.target.value })}
-                />
-                <p className="text-xs text-slate-400 mt-1">Required for main generation features.</p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1">Model Name</label>
-                <input
-                  type="text"
-                  className="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none"
-                  placeholder="gemini-2.5-flash"
-                  value={apiKeys.model}
-                  onChange={(e) => setApiKeys({ ...apiKeys, model: e.target.value })}
-                />
-                <p className="text-xs text-slate-400 mt-1">Specify the Gemini model version (default: gemini-2.5-flash).</p>
-              </div>
-
-              <div className="pt-4 border-t border-slate-100">
-                <label className="block text-sm font-semibold text-slate-400 mb-1">OpenAI Key (Optional)</label>
-                <input
-                  type="password"
-                  className="w-full border border-slate-200 rounded-lg p-2.5 bg-slate-50 text-slate-500 focus:bg-white transition-colors outline-none"
-                  placeholder="sk-..."
-                  value={apiKeys.openai || ''}
-                  onChange={(e) => setApiKeys({ ...apiKeys, openai: e.target.value })}
-                  disabled
-                />
-                <p className="text-xs text-slate-400 mt-1">Currently disabled in this demo version.</p>
-              </div>
-
-              <div className="">
-                <label className="block text-sm font-semibold text-slate-400 mb-1">Claude Key (Optional)</label>
-                <input
-                  type="password"
-                  className="w-full border border-slate-200 rounded-lg p-2.5 bg-slate-50 text-slate-500 focus:bg-white transition-colors outline-none"
-                  placeholder="sk-ant-..."
-                  value={apiKeys.claude || ''}
-                  onChange={(e) => setApiKeys({ ...apiKeys, claude: e.target.value })}
-                  disabled
-                />
-                <p className="text-xs text-slate-400 mt-1">Currently disabled in this demo version.</p>
-              </div>
-            </div>
-
-            <div className="mt-8 flex justify-end">
-              <button
-                onClick={() => saveKeys(apiKeys)}
-                disabled={!apiKeys.google}
-                className="bg-slate-900 hover:bg-black disabled:opacity-50 text-white px-6 py-2.5 rounded-lg font-medium transition-all"
-                title="Save keys and close modal"
-              >
-                Save & Continue
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ApiKeyModal
+        isOpen={showKeyModal}
+        apiKeys={apiKeys}
+        setApiKeys={setApiKeys}
+        saveKeys={saveKeys}
+      />
 
     </div>
   );
