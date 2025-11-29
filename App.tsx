@@ -14,7 +14,8 @@ import { RemarksPanel } from './components/RemarksPanel'; // Assuming this compo
 import {
   Settings, PenTool, Sparkles, Wand2, RefreshCw, Key, ArrowRight,
   Layout, Type, Copy, FileText, ChevronDown, Sliders, History,
-  Download, Upload, Save, FileJson, MessageSquarePlus, Send, MessageSquare, PanelRightOpen, PanelRightClose, X, Globe
+  Download, Upload, Save, FileJson, MessageSquarePlus, Send, MessageSquare, PanelRightOpen, PanelRightClose, X, Globe,
+  AlignLeft, List
 } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 
@@ -82,6 +83,8 @@ const App = () => {
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [language, setLanguage] = useState('English');
   const [showLanguageMenu, setShowLanguageMenu] = useState(false);
+  const [isMarkdownMode, setIsMarkdownMode] = useState(false);
+  const [markdownContent, setMarkdownContent] = useState('');
 
   // Content State
   const [topic, setTopic] = useState('');
@@ -505,6 +508,60 @@ const App = () => {
     setBlocks(items);
   };
 
+  // --- Markdown Conversion ---
+  const blocksToMarkdown = (currentBlocks: Block[]): string => {
+    return currentBlocks.map(b => {
+      const prefix = '#'.repeat(b.level + 1);
+      return `${prefix} ${b.title}`;
+    }).join('\n');
+  };
+
+  const markdownToBlocks = (markdown: string): Block[] => {
+    const lines = markdown.split('\n');
+    const newBlocks: Block[] = [];
+
+    lines.forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      const match = trimmed.match(/^(#{1,3})\s+(.*)/);
+      if (match) {
+        const level = match[1].length - 1; // # -> 0, ## -> 1, ### -> 2
+        const title = match[2].trim();
+
+        // Try to find existing block to preserve ID/content if possible (simple heuristic)
+        // For now, we'll just create new blocks to keep it simple and robust
+        newBlocks.push({
+          id: uuidv4(),
+          title,
+          level,
+          content: '',
+          suggestions: [],
+          comments: []
+        });
+      }
+    });
+    return newBlocks;
+  };
+
+  const toggleMarkdownMode = () => {
+    if (isMarkdownMode) {
+      // Switch to Visual: Parse markdown
+      const newBlocks = markdownToBlocks(markdownContent);
+      if (newBlocks.length > 0) {
+        setBlocks(newBlocks);
+      } else if (markdownContent.trim().length > 0) {
+        alert("No valid headers found. Use #, ##, or ### to define points.");
+        return; // Don't switch if invalid content but not empty
+      }
+      setIsMarkdownMode(false);
+    } else {
+      // Switch to Markdown: Convert blocks
+      setMarkdownContent(blocksToMarkdown(blocks));
+      setIsMarkdownMode(true);
+    }
+  };
+
   const changeLevel = (id: string, delta: number) => {
     setBlocks(prev => prev.map(b => {
       if (b.id === id) {
@@ -789,6 +846,13 @@ const App = () => {
 
             <div className="flex gap-2">
               <button
+                onClick={toggleMarkdownMode}
+                className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                title={isMarkdownMode ? "Switch to Visual View" : "Edit as Markdown"}
+              >
+                {isMarkdownMode ? <List size={20} /> : <AlignLeft size={20} />}
+              </button>
+              <button
                 onClick={handleGenerateOutline}
                 disabled={!topic || status === 'loading'}
                 className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-sm"
@@ -811,7 +875,19 @@ const App = () => {
 
           {/* Outline List */}
           <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-            {blocks.length === 0 ? (
+            {isMarkdownMode ? (
+              <div className="h-full flex flex-col">
+                <div className="bg-amber-50 border border-amber-100 text-amber-800 text-xs p-2 rounded mb-2">
+                  <strong>Markdown Mode:</strong> Use <code>#</code> for Main Sections, <code>##</code> for Sub-sections, <code>###</code> for Details.
+                </div>
+                <textarea
+                  value={markdownContent}
+                  onChange={(e) => setMarkdownContent(e.target.value)}
+                  className="flex-1 w-full p-4 font-mono text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                  placeholder="# Introduction&#10;## Background&#10;### Key Concept"
+                />
+              </div>
+            ) : blocks.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-slate-400 text-center p-8">
                 <Layout size={48} className="mb-4 opacity-50" />
                 <p className="text-sm">Enter a topic or pick a template.</p>
