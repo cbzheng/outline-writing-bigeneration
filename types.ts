@@ -83,3 +83,18 @@ export interface ExportData {
   current: AppState;
   history: Snapshot[];
 }
+
+export interface ReferenceFile {
+  id: string;
+  name: string;
+  type: string; // mime type
+  content: string; // base64 or text
+  isBase64: boolean;
+}
+
+export interface Insights {
+  style: string;
+  structure: string;
+  keyPoints: string[];
+  tone: string;
+}

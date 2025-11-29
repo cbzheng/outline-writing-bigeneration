@@ -3,15 +3,16 @@ import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import {
   Block, Comment, ApiKeys, GenerationStatus, CommentType, Template,
-  OutlineSettings, TextSettings, EditingCommentState, AppState, Snapshot, ExportData, Suggestion
+  OutlineSettings, TextSettings, EditingCommentState, AppState, Snapshot, ExportData, Suggestion, ReferenceFile, Insights
 } from './types';
-import { generateOutline, generateContentFromBlocks, generateSuggestion, generateBlocksFromContent } from './services/geminiService';
+import { generateOutline, generateContentFromBlocks, generateSuggestion, generateBlocksFromContent, generateInsights } from './services/geminiService';
 import { fileSystemStorageProvider } from './services/storageService';
 import { CommentModal } from './components/CommentModal';
 import { RegenerationModal } from './components/RegenerationModal';
 import { HistoryModal } from './components/HistoryModal';
 import { RemarksPanel } from './components/RemarksPanel';
 import { ApiKeyModal } from './components/ApiKeyModal';
+import { InsightsModal } from './components/InsightsModal';
 import { Header } from './components/Header';
 import { Editor } from './components/Editor';
 import { Sidebar } from './components/Sidebar';
@@ -91,6 +92,9 @@ const App = () => {
   const [rawContent, setRawContent] = useState('');
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(new Set());
+  const [referenceFiles, setReferenceFiles] = useState<ReferenceFile[]>([]);
+  const [insights, setInsights] = useState<Insights | null>(null);
+  const [showInsightsModal, setShowInsightsModal] = useState(false);
 
   // History State
   const [history, setHistory] = useState<Snapshot[]>([]);
@@ -443,9 +447,17 @@ const App = () => {
     setStatus('loading');
     setStatusMessage('Crafting structure...');
     try {
-      const rawOutline = await generateOutline(apiKeys.google, apiKeys.model, language, topic, blocks.length > 0 ? blocks : undefined, outlineSettings);
-
-      const newBlocks: Block[] = rawOutline.map(item => ({
+      const generatedBlocks = await generateOutline(
+        apiKeys.google,
+        apiKeys.model,
+        language,
+        topic,
+        undefined,
+        outlineSettings,
+        referenceFiles,
+        insights
+      );
+      const newBlocks: Block[] = generatedBlocks.map(item => ({
         id: uuidv4(),
         title: item.title || "Untitled Block",
         level: item.level ?? 0,
@@ -530,7 +542,12 @@ const App = () => {
     setStatusMessage(`Drafting content for ${targets.length} block(s)...`);
 
     try {
-      const contentMap = await generateContentFromBlocks(apiKeys.google, apiKeys.model, language, targets, topic, textSettings, refinementInstructions);
+      const contentMap = await generateContentFromBlocks(apiKeys.google, apiKeys.model, language, targets,
+        topic,
+        textSettings,
+        refinementInstructions,
+        blocks // Pass full context
+      );
 
       setBlocks(prev => {
         const next = prev.map(b => {
@@ -566,6 +583,24 @@ const App = () => {
       const map = { [regenerationTargetBlockId]: instruction };
       handleGenerateContent(true, map);
       setRegenerationTargetBlockId(null);
+    }
+  };
+
+  const handleAnalyzeFiles = async () => {
+    if (referenceFiles.length === 0) return;
+    setStatus('loading');
+    setStatusMessage('Analyzing reference files...');
+    try {
+      const result = await generateInsights(apiKeys.google, apiKeys.model, referenceFiles);
+      setInsights(result);
+      setShowInsightsModal(true);
+      setStatus('success');
+    } catch (e) {
+      console.error(e);
+      setStatus('error');
+      setStatusMessage('Failed to analyze files.');
+    } finally {
+      setTimeout(() => setStatus('idle'), 3000);
     }
   };
 
@@ -937,6 +972,11 @@ const App = () => {
           setTextSettings={setTextSettings}
           handleGenerateContent={handleGenerateContent}
           templates={TEMPLATES}
+          referenceFiles={referenceFiles}
+          setReferenceFiles={setReferenceFiles}
+          insights={insights}
+          onAnalyzeFiles={handleAnalyzeFiles}
+          onShowInsights={() => setShowInsightsModal(true)}
         />
 
         {/* Resizer Handle */}
@@ -999,10 +1039,15 @@ const App = () => {
       <ApiKeyModal
         isOpen={showKeyModal}
         apiKeys={apiKeys}
-        setApiKeys={setApiKeys}
-        saveKeys={saveKeys}
+        onSave={setApiKeys}
+        onClose={() => setShowKeyModal(false)}
       />
 
+      <InsightsModal
+        isOpen={showInsightsModal}
+        onClose={() => setShowInsightsModal(false)}
+        insights={insights}
+      />
     </div>
   );
 };

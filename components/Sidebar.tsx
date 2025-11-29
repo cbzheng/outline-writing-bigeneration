@@ -1,10 +1,10 @@
 import React from 'react';
 import {
-    Sliders, RefreshCw, Wand2, Layout, List, AlignLeft, ChevronDown, Type
+    Sliders, RefreshCw, Wand2, Layout, List, AlignLeft, ChevronDown, Type, Lightbulb, Sparkles
 } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { BlockItem } from './BlockItem';
-import { Block, OutlineSettings, TextSettings, Template, GenerationStatus } from '../types';
+import { Block, OutlineSettings, TextSettings, Template, GenerationStatus, ReferenceFile, Insights } from '../types';
 
 interface SidebarProps {
     sidebarWidth: number;
@@ -45,6 +45,11 @@ interface SidebarProps {
     setTextSettings: React.Dispatch<React.SetStateAction<TextSettings>>;
     handleGenerateContent: (onlySelected: boolean) => void;
     templates: Template[];
+    referenceFiles: ReferenceFile[];
+    setReferenceFiles: React.Dispatch<React.SetStateAction<ReferenceFile[]>>;
+    insights: Insights | null;
+    onAnalyzeFiles: () => void;
+    onShowInsights: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -86,7 +91,59 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setTextSettings,
     handleGenerateContent,
     templates,
+    referenceFiles,
+    setReferenceFiles,
+    insights,
+    onAnalyzeFiles,
+    onShowInsights,
 }) => {
+    const handleReferenceFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files.length > 0) {
+            const newFiles: ReferenceFile[] = [];
+
+            for (let i = 0; i < e.target.files.length; i++) {
+                const file = e.target.files[i];
+                const isPdf = file.type === 'application/pdf';
+
+                // Read file
+                const content = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const result = reader.result as string;
+                        // For PDF (base64), remove the data URL prefix
+                        if (isPdf) {
+                            resolve(result.split(',')[1]);
+                        } else {
+                            resolve(result);
+                        }
+                    };
+                    reader.onerror = reject;
+                    if (isPdf) {
+                        reader.readAsDataURL(file);
+                    } else {
+                        reader.readAsText(file);
+                    }
+                });
+
+                newFiles.push({
+                    id: Math.random().toString(36).substr(2, 9),
+                    name: file.name,
+                    type: file.type,
+                    content: content,
+                    isBase64: isPdf
+                });
+            }
+
+            setReferenceFiles(prev => [...prev, ...newFiles]);
+            // Reset input
+            e.target.value = '';
+        }
+    };
+
+    const removeReferenceFile = (id: string) => {
+        setReferenceFiles(prev => prev.filter(f => f.id !== id));
+    };
+
     return (
         <aside
             style={{ width: sidebarWidth }}
@@ -191,6 +248,54 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             </>
                         )}
 
+                        {/* Reference Files Section (New) */}
+                        <div className="p-4 border-b border-slate-200">
+                            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
+                                Reference Materials
+                            </label>
+
+                            <div className="space-y-2 mb-3">
+                                {referenceFiles.map(file => (
+                                    <div key={file.id} className="flex items-center justify-between bg-slate-100 px-2 py-1.5 rounded text-xs">
+                                        <span className="truncate max-w-[180px] text-slate-700" title={file.name}>{file.name}</span>
+                                        <button
+                                            onClick={() => removeReferenceFile(file.id)}
+                                            className="text-slate-400 hover:text-red-500 ml-2"
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="relative">
+                                <input
+                                    type="file"
+                                    multiple
+                                    accept=".pdf,.txt,.md,.json"
+                                    onChange={handleReferenceFileUpload}
+                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                />
+                                <div className="w-full border-2 border-dashed border-slate-300 rounded-lg p-3 text-center hover:bg-slate-50 hover:border-indigo-300 transition-colors">
+                                    <div className="text-xs text-slate-500 font-medium">
+                                        <span className="text-indigo-600">Upload files</span> to analyze style
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 mt-1">PDF, TXT, MD</div>
+                                </div>
+                            </div>
+
+                            {referenceFiles.length > 0 && (
+                                <button
+                                    onClick={onAnalyzeFiles}
+                                    disabled={status === 'loading'}
+                                    className="w-full mt-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-200 text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                                >
+                                    {status === 'loading' ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                                    Analyze Files
+                                </button>
+                            )}
+                        </div>
+
                         {/* Outline Settings Panel (Conditional) */}
                         {showOutlineSettings && inputMode === 'topic' && (
                             <div className="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs grid grid-cols-2 gap-2 animate-fade-in-down">
@@ -233,6 +338,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 >
                     {isMarkdownMode ? <List size={20} /> : <AlignLeft size={20} />}
                 </button>
+
+                {insights && (
+                    <button
+                        onClick={onShowInsights}
+                        className="p-2 text-amber-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-all animate-pulse-subtle"
+                        title="View Analysis Insights"
+                    >
+                        <Lightbulb size={20} />
+                    </button>
+                )}
                 {blocks.length > 0 && (
                     <button
                         onClick={addBlock}
