@@ -12,11 +12,20 @@ export interface Block {
   title: string;
   level: number; // 0 (H1), 1 (H2), 2 (H3)
   comments: Comment[];
+  suggestions: Suggestion[]; // History of AI suggestions
   content: string; // The generated prose for this block
+}
+
+export interface Suggestion {
+  id: string;
+  userText: string;
+  aiText: string;
+  timestamp: number;
 }
 
 export interface ApiKeys {
   google: string;
+  model: string; // e.g. "gemini-2.5-flash"
   openai?: string;
   claude?: string;
 }
@@ -41,10 +50,10 @@ export interface Template {
 }
 
 export interface EditingCommentState {
-    blockId: string;
-    commentId: string;
-    text: string;
-    type: CommentType;
+  blockId: string;
+  commentId: string;
+  text: string;
+  type: CommentType;
 }
 
 // --- Version History & Export Types ---

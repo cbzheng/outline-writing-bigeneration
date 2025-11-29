@@ -8,17 +8,18 @@ const getAiClient = (apiKey: string) => {
 
 export const generateOutline = async (
   apiKey: string,
+  model: string,
   topic: string,
   existingOutline?: Block[],
   settings?: OutlineSettings
 ): Promise<Partial<Block>[]> => {
   const ai = getAiClient(apiKey);
-  
-  const lengthInstruction = settings?.length === 'short' ? 'Keep the outline concise with fewer points (approx 3-5 main sections).' 
-    : settings?.length === 'long' ? 'Create a comprehensive, extensive outline with many sections.' 
-    : 'Create a standard length outline.';
 
-  const detailInstruction = settings?.detailLevel === 'high' ? 'Ensure deep nesting and granular detail (use levels 0, 1, and 2 extensively).' 
+  const lengthInstruction = settings?.length === 'short' ? 'Keep the outline concise with fewer points (approx 3-5 main sections).'
+    : settings?.length === 'long' ? 'Create a comprehensive, extensive outline with many sections.'
+      : 'Create a standard length outline.';
+
+  const detailInstruction = settings?.detailLevel === 'high' ? 'Ensure deep nesting and granular detail (use levels 0, 1, and 2 extensively).'
     : 'Keep high-level structure without too much nesting.';
 
   const systemInstruction = `You are an expert writing assistant. 
@@ -46,9 +47,9 @@ export const generateOutline = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: existingOutline 
-        ? `Refine and expand this outline based on the topic: ${topic}. Existing Structure: ${JSON.stringify(existingOutline.map(b => ({title: b.title, level: b.level})))}`
+      model: model || "gemini-2.5-flash",
+      contents: existingOutline
+        ? `Refine and expand this outline based on the topic: ${topic}. Existing Structure: ${JSON.stringify(existingOutline.map(b => ({ title: b.title, level: b.level })))}`
         : `Generate a comprehensive outline for the topic: "${topic}"`,
       config: {
         systemInstruction,
@@ -60,7 +61,7 @@ export const generateOutline = async (
 
     const text = response.text;
     if (!text) throw new Error("No response from AI");
-    
+
     return JSON.parse(text);
   } catch (error) {
     console.error("Gemini Outline Error:", error);
@@ -70,6 +71,7 @@ export const generateOutline = async (
 
 export const generateContentFromBlocks = async (
   apiKey: string,
+  model: string,
   blocks: Block[],
   topic: string,
   settings?: TextSettings,
@@ -79,17 +81,17 @@ export const generateContentFromBlocks = async (
 
   const blocksPayload = blocks.map(b => {
     let commentString = b.comments.map(c => `[${c.type.toUpperCase()}]: ${c.text}`).join("; ");
-    
+
     // Append specific refinement instruction if it exists for this block
     if (refinementInstructions && refinementInstructions[b.id]) {
-        commentString += ` ; [REFINEMENT INSTRUCTION - PRIORITY]: ${refinementInstructions[b.id]}`;
+      commentString += ` ; [REFINEMENT INSTRUCTION - PRIORITY]: ${refinementInstructions[b.id]}`;
     }
 
     return {
-        id: b.id,
-        title: b.title,
-        level: b.level,
-        user_comments: commentString
+      id: b.id,
+      title: b.title,
+      level: b.level,
+      user_comments: commentString
     };
   });
 
@@ -123,7 +125,7 @@ export const generateContentFromBlocks = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash", 
+      model: model || "gemini-2.5-flash",
       contents: `Topic: ${topic}. \n\nOutline Blocks: ${JSON.stringify(blocksPayload)}`,
       config: {
         systemInstruction,
@@ -136,13 +138,13 @@ export const generateContentFromBlocks = async (
     if (!text) throw new Error("No response from AI");
 
     const resultList = JSON.parse(text) as { block_id: string, content: string }[];
-    
+
     // Convert array back to map
     const contentMap: Record<string, string> = {};
     resultList.forEach(item => {
       contentMap[item.block_id] = item.content;
     });
-    
+
     return contentMap;
   } catch (error) {
     console.error("Gemini Content Gen Error:", error);
@@ -150,31 +152,60 @@ export const generateContentFromBlocks = async (
   }
 };
 
-export const regenerateOutlineFromText = async (
-    apiKey: string,
-    currentText: string
-): Promise<Partial<Block>[]> => {
-    const ai = getAiClient(apiKey);
-     const systemInstruction = `Analyze the provided text and extract a structured outline.`;
-     const schema: Schema = {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            title: { type: Type.STRING },
-            level: { type: Type.INTEGER },
-          },
-          required: ["title", "level"],
-        },
-      };
+export const generateSuggestion = async (
+  apiKey: string,
+  model: string,
+  blockContent: string,
+  userRemark: string
+): Promise<string> => {
+  const ai = getAiClient(apiKey);
+  const systemInstruction = `You are a helpful writing assistant. 
+    The user has provided some remarks or questions about a specific section of text.
+    Your task is to provide a helpful response, suggestion, or answer based on their remark.
+    Be concise and constructive.`;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: `Text to analyze: \n${currentText}`,
-        config: { systemInstruction, responseMimeType: "application/json", responseSchema: schema }
-      });
-      
-      const text = response.text;
-      if (!text) return [];
-      return JSON.parse(text);
+  try {
+    const response = await ai.models.generateContent({
+      model: model || "gemini-2.5-flash",
+      contents: `Context (Current Text):\n${blockContent}\n\nUser Remark:\n${userRemark}`,
+      config: {
+        systemInstruction,
+        temperature: 0.7,
+      }
+    });
+
+    return response.text || "No suggestion generated.";
+  } catch (error) {
+    console.error("Gemini Suggestion Error:", error);
+    throw error;
+  }
+};
+
+export const regenerateOutlineFromText = async (
+  apiKey: string,
+  currentText: string
+): Promise<Partial<Block>[]> => {
+  const ai = getAiClient(apiKey);
+  const systemInstruction = `Analyze the provided text and extract a structured outline.`;
+  const schema: Schema = {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING },
+        level: { type: Type.INTEGER },
+      },
+      required: ["title", "level"],
+    },
+  };
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: `Text to analyze: \n${currentText}`,
+    config: { systemInstruction, responseMimeType: "application/json", responseSchema: schema }
+  });
+
+  const text = response.text;
+  if (!text) return [];
+  return JSON.parse(text);
 }
