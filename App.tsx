@@ -461,7 +461,7 @@ const App = () => {
         id: uuidv4(),
         title: item.title || "Untitled Block",
         level: item.level ?? 0,
-        comments: [],
+        comments: item.comments ? item.comments.map(c => ({ ...c, id: uuidv4() })) : [],
         suggestions: [],
         content: ""
       }));
