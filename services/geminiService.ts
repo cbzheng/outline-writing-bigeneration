@@ -187,12 +187,19 @@ export const generateSuggestion = async (
   }
 };
 
-export const regenerateOutlineFromText = async (
+export const generateBlocksFromContent = async (
   apiKey: string,
   currentText: string
 ): Promise<Partial<Block>[]> => {
   const ai = getAiClient(apiKey);
-  const systemInstruction = `Analyze the provided text and extract a structured outline.`;
+  const systemInstruction = `Analyze the provided text and extract a structured outline with content.
+  Break the text down into logical blocks.
+  For each block, provide:
+  - title: A short summary title.
+  - level: Hierarchy level (0 for main sections, 1 for subsections, 2 for details).
+  - content: The actual text content belonging to this section.
+  `;
+
   const schema: Schema = {
     type: Type.ARRAY,
     items: {
@@ -200,8 +207,9 @@ export const regenerateOutlineFromText = async (
       properties: {
         title: { type: Type.STRING },
         level: { type: Type.INTEGER },
+        content: { type: Type.STRING },
       },
-      required: ["title", "level"],
+      required: ["title", "level", "content"],
     },
   };
 

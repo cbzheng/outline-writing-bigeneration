@@ -5,7 +5,7 @@ import {
   Block, Comment, ApiKeys, GenerationStatus, CommentType, Template,
   OutlineSettings, TextSettings, EditingCommentState, AppState, Snapshot, ExportData, Suggestion
 } from './types';
-import { generateOutline, generateContentFromBlocks, generateSuggestion } from './services/geminiService';
+import { generateOutline, generateContentFromBlocks, generateSuggestion, generateBlocksFromContent } from './services/geminiService';
 import { BlockItem } from './components/BlockItem';
 import { CommentModal } from './components/CommentModal';
 import { RegenerationModal } from './components/RegenerationModal';
@@ -87,7 +87,9 @@ const App = () => {
   const [markdownContent, setMarkdownContent] = useState('');
 
   // Content State
+  const [inputMode, setInputMode] = useState<'topic' | 'content'>('topic');
   const [topic, setTopic] = useState('');
+  const [rawContent, setRawContent] = useState('');
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(new Set());
 
@@ -378,6 +380,42 @@ const App = () => {
       console.error(e);
       setStatus('error');
       setStatusMessage('Failed to generate outline.');
+    } finally {
+      setTimeout(() => setStatus('idle'), 3000);
+    }
+  };
+
+  // 1.5 Generate Structure from Content
+  const handleGenerateStructure = async () => {
+    if (!apiKeys.google) {
+      setShowKeyModal(true);
+      return;
+    }
+    if (!rawContent.trim()) return;
+
+    setStatus('loading');
+    setStatusMessage('Analyzing content structure...');
+    try {
+      const rawBlocks = await generateBlocksFromContent(apiKeys.google, rawContent);
+
+      const newBlocks: Block[] = rawBlocks.map(item => ({
+        id: uuidv4(),
+        title: item.title || "Untitled Block",
+        level: item.level ?? 0,
+        comments: [],
+        suggestions: [],
+        content: item.content || ""
+      }));
+
+      setBlocks(newBlocks);
+      setStatus('success');
+
+      createSnapshot('Generated Structure from Content');
+
+    } catch (e) {
+      console.error(e);
+      setStatus('error');
+      setStatusMessage('Failed to generate structure.');
     } finally {
       setTimeout(() => setStatus('idle'), 3000);
     }
@@ -779,98 +817,133 @@ const App = () => {
           {/* Input Area */}
           <div className="p-4 bg-white border-b border-slate-200 relative">
             <div className="flex justify-between items-center mb-2">
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Topic / Intent</label>
-              <div className="relative group">
-                <select
-                  onChange={(e) => handleTemplateSelect(e.target.value)}
-                  className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-1 rounded cursor-pointer outline-none hover:bg-slate-200"
-                  defaultValue=""
-                  title="Select a document template"
+              <div className="flex gap-2 bg-slate-100 p-1 rounded-lg">
+                <button
+                  onClick={() => setInputMode('topic')}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${inputMode === 'topic' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                 >
-                  <option value="" disabled>Load Template...</option>
-                  {TEMPLATES.map(t => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </select>
+                  TOPIC
+                </button>
+                <button
+                  onClick={() => setInputMode('content')}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${inputMode === 'content' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  CONTENT
+                </button>
               </div>
-            </div>
 
-            <textarea
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              placeholder="E.g., 'The impact of remote work on productivity'"
-              className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none resize-none h-20 transition-all mb-2"
-            />
-
-            {/* Outline Settings Toggle */}
-            <div className="mb-2">
-              <button
-                onClick={() => setShowOutlineSettings(!showOutlineSettings)}
-                className="flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 font-medium"
-                title="Customize outline generation parameters"
-              >
-                <Sliders size={12} />
-                Outline Configuration
-              </button>
-
-              {showOutlineSettings && (
-                <div className="mt-2 p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs grid grid-cols-2 gap-2 animate-fade-in-down">
-                  <div>
-                    <label className="block text-slate-400 mb-1">Length</label>
-                    <select
-                      value={outlineSettings.length}
-                      onChange={(e) => setOutlineSettings({ ...outlineSettings, length: e.target.value as any })}
-                      className="w-full p-1 border rounded bg-white"
-                      title="Target length of the outline"
-                    >
-                      <option value="short">Short (3-5 pts)</option>
-                      <option value="medium">Medium</option>
-                      <option value="long">Long (Detailed)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">Depth</label>
-                    <select
-                      value={outlineSettings.detailLevel}
-                      onChange={(e) => setOutlineSettings({ ...outlineSettings, detailLevel: e.target.value as any })}
-                      className="w-full p-1 border rounded bg-white"
-                      title="Complexity of nested levels"
-                    >
-                      <option value="low">Simple</option>
-                      <option value="high">Complex (Nested)</option>
-                    </select>
-                  </div>
+              {inputMode === 'topic' && (
+                <div className="relative group">
+                  <select
+                    onChange={(e) => handleTemplateSelect(e.target.value)}
+                    className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-1 rounded cursor-pointer outline-none hover:bg-slate-200"
+                    defaultValue=""
+                    title="Select a document template"
+                  >
+                    <option value="" disabled>Load Template...</option>
+                    {TEMPLATES.map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
                 </div>
               )}
             </div>
 
-            <div className="flex gap-2">
+            {inputMode === 'topic' ? (
+              <>
+                <textarea
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                  placeholder="What do you want to write about? (e.g., 'The Future of AI in Healthcare')"
+                  className="w-full h-20 p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none resize-none transition-all"
+                />
+                <div className="flex justify-between items-center mt-3">
+                  <button
+                    onClick={() => setShowOutlineSettings(!showOutlineSettings)}
+                    className="text-xs font-medium text-slate-500 hover:text-indigo-600 flex items-center gap-1 transition-colors"
+                  >
+                    <Sliders size={14} /> Configure Outline
+                  </button>
+                  <button
+                    onClick={handleGenerateOutline}
+                    disabled={!topic.trim() || status === 'loading'}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg active:scale-95"
+                  >
+                    {status === 'loading' ? <RefreshCw size={16} className="animate-spin" /> : <Wand2 size={16} />}
+                    Generate Outline
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <textarea
+                  value={rawContent}
+                  onChange={(e) => setRawContent(e.target.value)}
+                  placeholder="Paste your existing content here..."
+                  className="w-full h-32 p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none resize-none transition-all font-mono"
+                />
+                <div className="flex justify-end items-center mt-3">
+                  <button
+                    onClick={handleGenerateStructure}
+                    disabled={!rawContent.trim() || status === 'loading'}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg active:scale-95"
+                  >
+                    {status === 'loading' ? <RefreshCw size={16} className="animate-spin" /> : <Layout size={16} />}
+                    Generate Structure
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Outline Settings Panel (Conditional) */}
+            {showOutlineSettings && inputMode === 'topic' && (
+              <div className="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs grid grid-cols-2 gap-2 animate-fade-in-down">
+                <div>
+                  <label className="block text-slate-400 mb-1">Length</label>
+                  <select
+                    value={outlineSettings.length}
+                    onChange={(e) => setOutlineSettings({ ...outlineSettings, length: e.target.value as any })}
+                    className="w-full p-1 border rounded bg-white"
+                    title="Target length of the outline"
+                  >
+                    <option value="short">Short (3-5 pts)</option>
+                    <option value="medium">Medium</option>
+                    <option value="long">Long (Detailed)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1">Depth</label>
+                  <select
+                    value={outlineSettings.detailLevel}
+                    onChange={(e) => setOutlineSettings({ ...outlineSettings, detailLevel: e.target.value as any })}
+                    className="w-full p-1 border rounded bg-white"
+                    title="Complexity of nested levels"
+                  >
+                    <option value="low">Simple</option>
+                    <option value="high">Complex (Nested)</option>
+                  </select>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex gap-2 px-4 py-2 border-b border-slate-100">
+            <button
+              onClick={toggleMarkdownMode}
+              className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+              title={isMarkdownMode ? "Switch to Visual View" : "Edit as Markdown"}
+            >
+              {isMarkdownMode ? <List size={20} /> : <AlignLeft size={20} />}
+            </button>
+            {blocks.length > 0 && (
               <button
-                onClick={toggleMarkdownMode}
-                className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                title={isMarkdownMode ? "Switch to Visual View" : "Edit as Markdown"}
+                onClick={addBlock}
+                className="px-3 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium text-xl ml-auto"
+                title="Add manual block"
               >
-                {isMarkdownMode ? <List size={20} /> : <AlignLeft size={20} />}
+                +
               </button>
-              <button
-                onClick={handleGenerateOutline}
-                disabled={!topic || status === 'loading'}
-                className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-sm"
-                title="Generate or refine the outline based on the topic"
-              >
-                <Wand2 size={16} />
-                {blocks.length > 0 ? 'Refine Outline' : 'Generate Outline'}
-              </button>
-              {blocks.length > 0 && (
-                <button
-                  onClick={addBlock}
-                  className="px-3 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium text-xl"
-                  title="Add manual block"
-                >
-                  +
-                </button>
-              )}
-            </div>
+            )}
           </div>
 
           {/* Outline List */}
@@ -902,7 +975,7 @@ const App = () => {
                       ref={provided.innerRef}
                     >
                       {blocks.map((block, index) => (
-                        <Draggable key={block.id} draggableId={block.id} index={index}>
+                        <Draggable draggableId={block.id} index={index} key={block.id}>
                           {(provided, snapshot) => (
                             <BlockItem
                               block={block}
@@ -1011,7 +1084,7 @@ const App = () => {
 
         {/* Right Panel: Content Editor */}
         <main className="flex-1 overflow-y-auto p-8 lg:p-12 bg-white relative">
-          <div className="max-w-3xl mx-auto min-h-full">
+          <div className="max-w-5xl mx-auto min-h-full">
 
             <div className="flex justify-end mb-4">
               <button
@@ -1038,40 +1111,36 @@ const App = () => {
                   <div
                     id={`text-block-${block.id}`}
                     key={block.id}
-                    className={`mb-6 transition-all duration-300 ${selectedBlockIds.has(block.id) ? 'translate-x-2' : ''}`}
+                    className={`transition-all duration-300 ${selectedBlockIds.has(block.id) ? 'translate-x-1 mb-2' : 'mb-1'}`}
                   >
-                    {/* Block Title Label */}
-                    <div className={`text-[10px] uppercase font-bold text-slate-300 mb-1 flex items-center gap-2 ${selectedBlockIds.has(block.id) ? 'text-indigo-400' : 'opacity-0 hover:opacity-100'}`}>
-                      <FileText size={10} />
-                      {block.title}
-                    </div>
-
-                    {/* Toolbar (Visible on Hover/Select) */}
-                    <div className={`flex items-center justify-between mb-1 opacity-0 group-hover:opacity-100 transition-opacity ${selectedBlockIds.has(block.id) ? 'opacity-100' : ''}`}>
-                      <div className="flex items-center gap-1">
-                        {/* Move Up/Down */}
-                        <div className="flex bg-white border border-slate-200 rounded overflow-hidden shadow-sm">
-                          {/* ... existing buttons if any, or just keep it simple ... */}
-                        </div>
+                    {/* Combined Header: Title + Toolbar */}
+                    <div className="flex items-center justify-between mb-1 min-h-[24px]">
+                      {/* Block Title Label */}
+                      <div className={`text-[10px] uppercase font-bold text-slate-300 flex items-center gap-2 ${selectedBlockIds.has(block.id) ? 'text-indigo-400' : 'opacity-0 hover:opacity-100'}`}>
+                        <FileText size={10} />
+                        {block.title}
                       </div>
 
-                      {/* Right Side Toolbar Actions */}
-                      <div className="flex bg-white border border-slate-200 rounded overflow-hidden shadow-sm">
-                        <button
-                          onClick={() => setActiveRemarkBlockId(block.id)}
-                          className="p-1.5 hover:bg-slate-100 text-slate-500 hover:text-indigo-600"
-                          title="Open remarks panel"
-                        >
-                          <MessageSquarePlus size={14} />
-                        </button>
-                        <div className="w-px bg-slate-200 mx-1"></div>
-                        <button
-                          onClick={() => toggleInlineRemarks(block.id)}
-                          className={`p-1.5 hover:bg-slate-100 ${inlineRemarksBlockIds.has(block.id) ? 'text-indigo-600 bg-indigo-50' : 'text-slate-500 hover:text-indigo-600'}`}
-                          title="Toggle inline remarks view"
-                        >
-                          {inlineRemarksBlockIds.has(block.id) ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
-                        </button>
+                      {/* Toolbar (Visible on Hover/Select) */}
+                      <div className={`flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity ${selectedBlockIds.has(block.id) ? 'opacity-100' : ''}`}>
+                        {/* Right Side Toolbar Actions */}
+                        <div className="flex bg-white border border-slate-200 rounded overflow-hidden shadow-sm">
+                          <button
+                            onClick={() => setActiveRemarkBlockId(block.id)}
+                            className="p-1.5 hover:bg-slate-100 text-slate-500 hover:text-indigo-600"
+                            title="Open remarks panel"
+                          >
+                            <MessageSquarePlus size={14} />
+                          </button>
+                          <div className="w-px bg-slate-200 mx-1"></div>
+                          <button
+                            onClick={() => toggleInlineRemarks(block.id)}
+                            className={`p-1.5 hover:bg-slate-100 ${inlineRemarksBlockIds.has(block.id) ? 'text-indigo-600 bg-indigo-50' : 'text-slate-500 hover:text-indigo-600'}`}
+                            title="Toggle inline remarks view"
+                          >
+                            {inlineRemarksBlockIds.has(block.id) ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -1084,8 +1153,8 @@ const App = () => {
                           onChange={(e) => updateBlock(block.id, { content: e.target.value })}
                           onFocus={() => handleTextFocus(block.id)}
                           placeholder="Drafting content..."
-                          className="w-full bg-transparent resize-none overflow-hidden outline-none text-slate-700 leading-relaxed min-h-[100px] p-2 rounded hover:bg-slate-50 transition-colors font-serif text-lg"
-                          style={{ height: 'auto', minHeight: '100px' }}
+                          className={`w-full bg-transparent resize-none overflow-hidden outline-none leading-relaxed min-h-[1.5em] px-0 py-1 rounded hover:bg-slate-50 transition-colors font-serif ${block.level === 0 ? 'text-2xl font-bold text-slate-800' : 'text-lg text-slate-700'}`}
+                          style={{ height: 'auto', minHeight: '1.5em' }}
                           ref={(el) => {
                             if (el) {
                               el.style.height = 'auto';
@@ -1149,12 +1218,12 @@ const App = () => {
             )}
 
             <div className="h-40"></div> {/* Bottom spacer */}
-          </div >
-        </main >
-      </div >
+          </div>
+        </main>
+      </div>
 
       {/* Modals */}
-      < CommentModal
+      <CommentModal
         isOpen={!!activeCommentBlockId || !!editingComment}
         onClose={() => { setActiveCommentBlockId(null); setEditingComment(null); }}
         onSave={saveComment}
@@ -1187,88 +1256,86 @@ const App = () => {
         setStatusMessage={setStatusMessage}
       />
 
-      {
-        showKeyModal && (
-          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-            <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-lg">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="p-3 bg-indigo-100 rounded-full text-indigo-600">
-                  <Key size={24} />
-                </div>
-                <div>
-                  <h2 className="text-xl font-bold text-slate-800">API Configuration</h2>
-                  <p className="text-sm text-slate-500">Enter your provider keys to enable AI features.</p>
-                </div>
+      {showKeyModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-lg">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-3 bg-indigo-100 rounded-full text-indigo-600">
+                <Key size={24} />
               </div>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-1">Google Gemini Key <span className="text-red-500">*</span></label>
-                  <input
-                    type="password"
-                    className="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder="AIzaSy..."
-                    value={apiKeys.google}
-                    onChange={(e) => setApiKeys({ ...apiKeys, google: e.target.value })}
-                  />
-                  <p className="text-xs text-slate-400 mt-1">Required for main generation features.</p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-1">Model Name</label>
-                  <input
-                    type="text"
-                    className="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder="gemini-2.5-flash"
-                    value={apiKeys.model}
-                    onChange={(e) => setApiKeys({ ...apiKeys, model: e.target.value })}
-                  />
-                  <p className="text-xs text-slate-400 mt-1">Specify the Gemini model version (default: gemini-2.5-flash).</p>
-                </div>
-
-                <div className="pt-4 border-t border-slate-100">
-                  <label className="block text-sm font-semibold text-slate-400 mb-1">OpenAI Key (Optional)</label>
-                  <input
-                    type="password"
-                    className="w-full border border-slate-200 rounded-lg p-2.5 bg-slate-50 text-slate-500 focus:bg-white transition-colors outline-none"
-                    placeholder="sk-..."
-                    value={apiKeys.openai || ''}
-                    onChange={(e) => setApiKeys({ ...apiKeys, openai: e.target.value })}
-                    disabled
-                  />
-                  <p className="text-xs text-slate-400 mt-1">Currently disabled in this demo version.</p>
-                </div>
-
-                <div className="">
-                  <label className="block text-sm font-semibold text-slate-400 mb-1">Claude Key (Optional)</label>
-                  <input
-                    type="password"
-                    className="w-full border border-slate-200 rounded-lg p-2.5 bg-slate-50 text-slate-500 focus:bg-white transition-colors outline-none"
-                    placeholder="sk-ant-..."
-                    value={apiKeys.claude || ''}
-                    onChange={(e) => setApiKeys({ ...apiKeys, claude: e.target.value })}
-                    disabled
-                  />
-                  <p className="text-xs text-slate-400 mt-1">Currently disabled in this demo version.</p>
-                </div>
-              </div>
-
-              <div className="mt-8 flex justify-end">
-                <button
-                  onClick={() => saveKeys(apiKeys)}
-                  disabled={!apiKeys.google}
-                  className="bg-slate-900 hover:bg-black disabled:opacity-50 text-white px-6 py-2.5 rounded-lg font-medium transition-all"
-                  title="Save keys and close modal"
-                >
-                  Save & Continue
-                </button>
+              <div>
+                <h2 className="text-xl font-bold text-slate-800">API Configuration</h2>
+                <p className="text-sm text-slate-500">Enter your provider keys to enable AI features.</p>
               </div>
             </div>
-          </div>
-        )
-      }
 
-    </div >
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1">Google Gemini Key <span className="text-red-500">*</span></label>
+                <input
+                  type="password"
+                  className="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="AIzaSy..."
+                  value={apiKeys.google}
+                  onChange={(e) => setApiKeys({ ...apiKeys, google: e.target.value })}
+                />
+                <p className="text-xs text-slate-400 mt-1">Required for main generation features.</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1">Model Name</label>
+                <input
+                  type="text"
+                  className="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="gemini-2.5-flash"
+                  value={apiKeys.model}
+                  onChange={(e) => setApiKeys({ ...apiKeys, model: e.target.value })}
+                />
+                <p className="text-xs text-slate-400 mt-1">Specify the Gemini model version (default: gemini-2.5-flash).</p>
+              </div>
+
+              <div className="pt-4 border-t border-slate-100">
+                <label className="block text-sm font-semibold text-slate-400 mb-1">OpenAI Key (Optional)</label>
+                <input
+                  type="password"
+                  className="w-full border border-slate-200 rounded-lg p-2.5 bg-slate-50 text-slate-500 focus:bg-white transition-colors outline-none"
+                  placeholder="sk-..."
+                  value={apiKeys.openai || ''}
+                  onChange={(e) => setApiKeys({ ...apiKeys, openai: e.target.value })}
+                  disabled
+                />
+                <p className="text-xs text-slate-400 mt-1">Currently disabled in this demo version.</p>
+              </div>
+
+              <div className="">
+                <label className="block text-sm font-semibold text-slate-400 mb-1">Claude Key (Optional)</label>
+                <input
+                  type="password"
+                  className="w-full border border-slate-200 rounded-lg p-2.5 bg-slate-50 text-slate-500 focus:bg-white transition-colors outline-none"
+                  placeholder="sk-ant-..."
+                  value={apiKeys.claude || ''}
+                  onChange={(e) => setApiKeys({ ...apiKeys, claude: e.target.value })}
+                  disabled
+                />
+                <p className="text-xs text-slate-400 mt-1">Currently disabled in this demo version.</p>
+              </div>
+            </div>
+
+            <div className="mt-8 flex justify-end">
+              <button
+                onClick={() => saveKeys(apiKeys)}
+                disabled={!apiKeys.google}
+                className="bg-slate-900 hover:bg-black disabled:opacity-50 text-white px-6 py-2.5 rounded-lg font-medium transition-all"
+                title="Save keys and close modal"
+              >
+                Save & Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
   );
 };
 
