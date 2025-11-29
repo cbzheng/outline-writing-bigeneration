@@ -9,6 +9,7 @@ const getAiClient = (apiKey: string) => {
 export const generateOutline = async (
   apiKey: string,
   model: string,
+  language: string,
   topic: string,
   existingOutline?: Block[],
   settings?: OutlineSettings
@@ -28,6 +29,7 @@ export const generateOutline = async (
   Levels should be 0 (Main Section), 1 (Sub-section), 2 (Detail).
   
   Configuration:
+  - Output Language: The generated content MUST be in ${language}.
   - ${lengthInstruction}
   - ${detailInstruction}
 
@@ -72,6 +74,7 @@ export const generateOutline = async (
 export const generateContentFromBlocks = async (
   apiKey: string,
   model: string,
+  language: string,
   blocks: Block[],
   topic: string,
   settings?: TextSettings,
@@ -100,6 +103,7 @@ export const generateContentFromBlocks = async (
   Your task is to write the actual content (prose) for EACH block.
   
   Style & Tone Settings:
+  - Output Language: The generated content MUST be in ${language}.
   - Tone: ${settings?.tone || 'formal'}
   - Custom Instructions: ${settings?.customInstructions || 'None'}
   
@@ -155,6 +159,7 @@ export const generateContentFromBlocks = async (
 export const generateSuggestion = async (
   apiKey: string,
   model: string,
+  language: string,
   blockContent: string,
   userRemark: string
 ): Promise<string> => {
@@ -162,7 +167,8 @@ export const generateSuggestion = async (
   const systemInstruction = `You are a helpful writing assistant. 
     The user has provided some remarks or questions about a specific section of text.
     Your task is to provide a helpful response, suggestion, or answer based on their remark.
-    Be concise and constructive.`;
+    Be concise and constructive.
+    Output Language: The response MUST be in ${language}.`;
 
   try {
     const response = await ai.models.generateContent({

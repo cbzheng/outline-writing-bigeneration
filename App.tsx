@@ -14,8 +14,9 @@ import { RemarksPanel } from './components/RemarksPanel'; // Assuming this compo
 import {
   Settings, PenTool, Sparkles, Wand2, RefreshCw, Key, ArrowRight,
   Layout, Type, Copy, FileText, ChevronDown, Sliders, History,
-  Download, Upload, Save, FileJson, MessageSquarePlus, Send, MessageSquare, PanelRightOpen, PanelRightClose, X
+  Download, Upload, Save, FileJson, MessageSquarePlus, Send, MessageSquare, PanelRightOpen, PanelRightClose, X, Globe
 } from 'lucide-react';
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 
 const LOCAL_STORAGE_KEY_API = 'structura_api_keys';
 
@@ -79,6 +80,8 @@ const App = () => {
   // --- State ---
   const [apiKeys, setApiKeys] = useState<ApiKeys>({ google: '', model: 'gemini-2.5-flash' });
   const [showKeyModal, setShowKeyModal] = useState(false);
+  const [language, setLanguage] = useState('English');
+  const [showLanguageMenu, setShowLanguageMenu] = useState(false);
 
   // Content State
   const [topic, setTopic] = useState('');
@@ -351,7 +354,7 @@ const App = () => {
     setStatus('loading');
     setStatusMessage('Crafting structure...');
     try {
-      const rawOutline = await generateOutline(apiKeys.google, apiKeys.model, topic, blocks.length > 0 ? blocks : undefined, outlineSettings);
+      const rawOutline = await generateOutline(apiKeys.google, apiKeys.model, language, topic, blocks.length > 0 ? blocks : undefined, outlineSettings);
 
       const newBlocks: Block[] = rawOutline.map(item => ({
         id: uuidv4(),
@@ -401,7 +404,7 @@ const App = () => {
     setStatusMessage(`Drafting content for ${targets.length} block(s)...`);
 
     try {
-      const contentMap = await generateContentFromBlocks(apiKeys.google, apiKeys.model, targets, topic, textSettings, refinementInstructions);
+      const contentMap = await generateContentFromBlocks(apiKeys.google, apiKeys.model, language, targets, topic, textSettings, refinementInstructions);
 
       setBlocks(prev => {
         const next = prev.map(b => {
@@ -490,6 +493,16 @@ const App = () => {
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
     [newBlocks[index], newBlocks[targetIndex]] = [newBlocks[targetIndex], newBlocks[index]];
     setBlocks(newBlocks);
+  };
+
+  const handleDragEnd = (result: DropResult) => {
+    if (!result.destination) return;
+
+    const items = Array.from(blocks);
+    const [reorderedItem] = items.splice(result.source.index, 1);
+    items.splice(result.destination.index, 0, reorderedItem);
+
+    setBlocks(items);
   };
 
   const changeLevel = (id: string, delta: number) => {
@@ -622,6 +635,44 @@ const App = () => {
           >
             <History size={20} />
           </button>
+
+          <div className="relative">
+            <button
+              onClick={() => setShowLanguageMenu(!showLanguageMenu)}
+              className={`p-2 rounded-md transition-all flex items-center gap-1 ${showLanguageMenu ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:text-indigo-600 hover:bg-indigo-50'}`}
+              title="Output Language"
+            >
+              <Globe size={20} />
+              <span className="text-xs font-medium hidden sm:inline">{language}</span>
+            </button>
+            {showLanguageMenu && (
+              <div className="absolute top-full right-0 mt-2 w-32 bg-white rounded-xl shadow-xl border border-slate-100 p-1 z-50 animate-fade-in-up">
+                {['English', '中文', 'Spanish', 'French', 'German', 'Japanese'].map(lang => (
+                  <button
+                    key={lang}
+                    onClick={() => {
+                      setLanguage(lang);
+                      setShowLanguageMenu(false);
+                    }}
+                    className={`w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-slate-50 ${language === lang ? 'text-indigo-600 font-semibold bg-indigo-50' : 'text-slate-600'}`}
+                  >
+                    {lang}
+                  </button>
+                ))}
+                <div className="h-px bg-slate-100 my-1"></div>
+                <button
+                  onClick={() => {
+                    const custom = prompt("Enter custom language:", language);
+                    if (custom) setLanguage(custom);
+                    setShowLanguageMenu(false);
+                  }}
+                  className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-slate-50 text-slate-600 italic"
+                >
+                  Custom...
+                </button>
+              </div>
+            )}
+          </div>
 
           <div className="relative">
             <button
@@ -766,24 +817,39 @@ const App = () => {
                 <p className="text-sm">Enter a topic or pick a template.</p>
               </div>
             ) : (
-              <div className="space-y-1 pb-20">
-                {blocks.map((block, index) => (
-                  <BlockItem
-                    key={block.id}
-                    block={block}
-                    isSelected={selectedBlockIds.has(block.id)}
-                    onSelect={(id) => handleBlockSelect(id, true)}
-                    onUpdate={updateBlock}
-                    onRemove={removeBlock}
-                    onAddComment={(id) => setActiveCommentBlockId(id)}
-                    onEditComment={startEditingComment}
-                    onMoveUp={() => moveBlock(index, 'up')}
-                    onMoveDown={() => moveBlock(index, 'down')}
-                    onIndent={() => changeLevel(block.id, 1)}
-                    onOutdent={() => changeLevel(block.id, -1)}
-                  />
-                ))}
-              </div>
+              <DragDropContext onDragEnd={handleDragEnd}>
+                <Droppable droppableId="outline-list">
+                  {(provided) => (
+                    <div
+                      className="space-y-1 pb-20"
+                      {...provided.droppableProps}
+                      ref={provided.innerRef}
+                    >
+                      {blocks.map((block, index) => (
+                        <Draggable key={block.id} draggableId={block.id} index={index}>
+                          {(provided, snapshot) => (
+                            <BlockItem
+                              block={block}
+                              isSelected={selectedBlockIds.has(block.id)}
+                              onSelect={(id) => handleBlockSelect(id, true)}
+                              onUpdate={updateBlock}
+                              onRemove={removeBlock}
+                              onAddComment={(id) => setActiveCommentBlockId(id)}
+                              onEditComment={startEditingComment}
+                              onMoveUp={() => moveBlock(index, 'up')}
+                              onMoveDown={() => moveBlock(index, 'down')}
+                              onIndent={() => changeLevel(block.id, 1)}
+                              onOutdent={() => changeLevel(block.id, -1)}
+                              dragProvided={provided}
+                            />
+                          )}
+                        </Draggable>
+                      ))}
+                      {provided.placeholder}
+                    </div>
+                  )}
+                </Droppable>
+              </DragDropContext>
             )}
           </div>
 
@@ -1039,6 +1105,7 @@ const App = () => {
         blockId={activeRemarkBlockId}
         blocks={blocks}
         apiKeys={apiKeys}
+        language={language}
         updateBlock={updateBlock}
         setStatus={setStatus}
         setStatusMessage={setStatusMessage}

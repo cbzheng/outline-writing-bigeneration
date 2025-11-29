@@ -9,6 +9,7 @@ interface RemarksPanelProps {
     blockId: string | null;
     blocks: Block[];
     apiKeys: ApiKeys;
+    language: string;
     updateBlock: (id: string, updates: Partial<Block>) => void;
     setStatus: (status: GenerationStatus) => void;
     setStatusMessage: (msg: string) => void;
@@ -20,6 +21,7 @@ export const RemarksPanel: React.FC<RemarksPanelProps> = ({
     blockId,
     blocks,
     apiKeys,
+    language,
     updateBlock,
     setStatus,
     setStatusMessage
@@ -49,8 +51,9 @@ export const RemarksPanel: React.FC<RemarksPanelProps> = ({
             const map = await generateContentFromBlocks(
                 apiKeys.google,
                 apiKeys.model,
+                language,
                 [block],
-                "", // Topic not needed for refinement usually, or passed from context if available. 
+                "", // Topic not needed for refinement usually, or passed from context if available.
                 // Ideally App should pass topic, but for refinement, block context is key.
                 // Let's assume the service handles empty topic if refinement is present.
                 undefined,
@@ -80,6 +83,7 @@ export const RemarksPanel: React.FC<RemarksPanelProps> = ({
             const suggestionText = await generateSuggestion(
                 apiKeys.google,
                 apiKeys.model,
+                language,
                 block.content,
                 remark
             );
