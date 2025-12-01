@@ -14,6 +14,7 @@ export interface Block {
   comments: Comment[];
   suggestions: Suggestion[]; // History of AI suggestions
   content: string; // The generated prose for this block
+  pendingContent?: string; // Content waiting for approval (diff view)
   isOutdated?: boolean; // Indicates if the block content might be out of sync with the title
 }
 

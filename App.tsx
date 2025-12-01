@@ -552,6 +552,11 @@ const App = () => {
       setBlocks(prev => {
         const next = prev.map(b => {
           if (contentMap[b.id]) {
+            // If regenerating (refinementInstructions present), set as pending
+            if (refinementInstructions && b.content) {
+              return { ...b, pendingContent: contentMap[b.id] };
+            }
+            // Otherwise (first generation or empty), set directly
             return { ...b, content: contentMap[b.id], isOutdated: false };
           }
           return b;
@@ -616,9 +621,13 @@ const App = () => {
         newBlock.isOutdated = true;
       }
 
-      // If content is updated manually, clear outdated flag
+      // If content is updated manually, clear outdated flag AND pending content
       if (updates.content !== undefined) {
         newBlock.isOutdated = false;
+        // Only clear pendingContent if it wasn't also updated in this call (i.e. manual edit vs granular merge)
+        if (newBlock.pendingContent && updates.pendingContent === undefined) {
+          delete newBlock.pendingContent;
+        }
       }
 
       // If isOutdated is explicitly passed (e.g. dismiss), respect it
@@ -627,6 +636,26 @@ const App = () => {
       }
 
       return newBlock;
+    }));
+  };
+
+  const handleAcceptPending = (blockId: string) => {
+    setBlocks(prev => prev.map(b => {
+      if (b.id === blockId && b.pendingContent) {
+        return { ...b, content: b.pendingContent, pendingContent: undefined, isOutdated: false };
+      }
+      return b;
+    }));
+    createSnapshot('Accepted Changes');
+  };
+
+  const handleDiscardPending = (blockId: string) => {
+    setBlocks(prev => prev.map(b => {
+      if (b.id === blockId) {
+        const { pendingContent, ...rest } = b;
+        return rest;
+      }
+      return b;
     }));
   };
 
@@ -998,6 +1027,8 @@ const App = () => {
           toggleInlineRemarks={toggleInlineRemarks}
           inlineRemarksBlockIds={inlineRemarksBlockIds}
           setRegenerationTargetBlockId={setRegenerationTargetBlockId}
+          onAcceptPending={handleAcceptPending}
+          onDiscardPending={handleDiscardPending}
         />
       </div>
 
@@ -1039,8 +1070,8 @@ const App = () => {
       <ApiKeyModal
         isOpen={showKeyModal}
         apiKeys={apiKeys}
-        onSave={setApiKeys}
-        onClose={() => setShowKeyModal(false)}
+        setApiKeys={setApiKeys}
+        saveKeys={saveKeys}
       />
 
       <InsightsModal
